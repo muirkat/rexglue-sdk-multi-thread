@@ -122,6 +122,9 @@ void ApplyToml(const toml::table& toml, RecompilerConfig& cfg, const std::string
             hasBool("non_volatile_as_local"), "non_volatile_as_local");
   MergeBool(cfg.generateExceptionHandlers, toml["generate_exception_handlers"].value_or(false),
             hasBool("generate_exception_handlers"), "generate_exception_handlers");
+  if (hasBool("is_dll")) {
+    cfg.isDll = toml["is_dll"].value_or(false);
+  }
 
   // Integer scalars (only override if present)
   if (auto v = toml["longjmp_address"].value<int64_t>()) {

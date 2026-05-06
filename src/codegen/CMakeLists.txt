@@ -25,6 +25,7 @@ set(CODEGEN_CORE_SOURCES
     phase_validate.cpp
     template_registry.cpp
     manifest.cpp
+    project_recompiler.cpp
 )
 
 # PPC architecture sources (merged from rexarch)
@@ -58,6 +59,7 @@ set(INJA_TEMPLATE_FILES
     ${TEMPLATE_SOURCE_DIR}/init/cmakelists.inja
     ${TEMPLATE_SOURCE_DIR}/init/cmake_presets.inja
     ${TEMPLATE_SOURCE_DIR}/init/rexglue_cmake.inja
+    ${TEMPLATE_SOURCE_DIR}/codegen/_indirect_call.inja
     ${TEMPLATE_SOURCE_DIR}/codegen/init_cpp.inja
     ${TEMPLATE_SOURCE_DIR}/codegen/init_h.inja
     ${TEMPLATE_SOURCE_DIR}/codegen/sources_cmake.inja

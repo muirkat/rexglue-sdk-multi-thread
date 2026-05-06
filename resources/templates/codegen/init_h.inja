@@ -21,6 +21,7 @@
 #define REX_IMAGE_SIZE {{ image_size }}ull
 #define REX_CODE_BASE {{ code_base }}ull
 #define REX_CODE_SIZE {{ code_size }}ull
+#define REX_THUNK_RESERVE_SIZE {{ thunk_reserve_size }}ull
 
 #define REXCRT_HEAP {% if rexcrt_heap %}1{% else %}0{% endif %}
 
@@ -221,17 +222,7 @@ extern PPCFuncMapping PPCFuncMappings[];
 
 #define REX_CALL_FUNC(x) x(ctx, base)
 
-#define REX_LOOKUP_FUNC(x, y) \
-  (*(PPCFunc**)(x + REX_IMAGE_BASE + REX_IMAGE_SIZE + (u64(u32(y) - REX_CODE_BASE) * 2)))
-
-#ifdef REXGLUE_ENABLE_PROFILING
-#define REX_CALL_INDIRECT_FUNC(x) \
-  PROFILE_FUNCTION_DISPATCHED();  \
-  REX_LOOKUP_FUNC(base, x)(ctx, base);
-#else
-#define REX_CALL_INDIRECT_FUNC(x) \
-  REX_LOOKUP_FUNC(base, x)(ctx, base);
-#endif
+{% include "codegen/_indirect_call.inja" %}
 
 //=============================================================================
 // Flush Mode
@@ -362,6 +353,4 @@ inline std::atomic<i32>& ppc_global_lock_count_() {
 //=============================================================================
 
 {% for fn in functions %}DECLARE_REX_FUNC({{ fn.name }});
-{% endfor %}
-{% for imp in imports %}DECLARE_REX_FUNC({{ imp.name }});
 {% endfor %}

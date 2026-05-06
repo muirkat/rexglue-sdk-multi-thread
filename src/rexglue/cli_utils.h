@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace rexglue::cli {
 
@@ -23,6 +24,7 @@ struct CliContext {
   bool verbose = false;
   bool force = false;                    // Generate output despite validation errors
   bool enableExceptionHandlers = false;  // Enable SEH exception handler generation
+  std::vector<std::string> targets;      // --target filter for multi-binary codegen
 };
 
 }  // namespace rexglue::cli

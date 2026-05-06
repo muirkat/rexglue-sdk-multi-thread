@@ -73,18 +73,7 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
         {"name", funcName},
         {"is_rexcrt", isRexcrt},
         {"below_code_base", (fn->base() < codeMin)},
-        {"is_import", false},
-    });
-  }
-
-  // Build imports JSON array
-  nlohmann::json importsJson = nlohmann::json::array();
-  for (const auto& [addr, node] : ctx.graph.functions()) {
-    if (node->authority() != rex::codegen::FunctionAuthority::IMPORT)
-      continue;
-    importsJson.push_back({
-        {"address", fmt::format("0x{:X}", addr)},
-        {"name", node->name()},
+        {"is_import", fn->authority() == rex::codegen::FunctionAuthority::IMPORT},
     });
   }
 
@@ -107,9 +96,11 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
       {"code_base", fmt::format("0x{:X}", codeMin)},
       {"code_size", fmt::format("0x{:X}", codeMax - codeMin)},
       {"rexcrt_heap", cfg.rexcrtFunctions.contains("RtlAllocateHeap") ? 1 : 0},
+      {"thunk_reserve_size", fmt::format("0x{:X}", 0x10000u)},
+      {"has_dll_modules", ctx.hasDllModules()},
+      {"is_dll", ctx.isDllModule()},
       {"config_flags", configFlags},
       {"functions", functionsJson},
-      {"imports", importsJson},
       {"recomp_files", nlohmann::json::array()},
   };
 }
@@ -213,6 +204,12 @@ bool CodegenWriter::write(bool force) {
   REXCODEGEN_TRACE("Recompile: generating {}_init.cpp", projectName);
   out = renderWithJson(registry, "codegen/init_cpp", tmplData);
   SaveCurrentOutData(fmt::format("{}_init.cpp", projectName));
+
+  // Generate {project}_register.cpp (registration function for hash-based dispatch)
+  REXCODEGEN_TRACE("Recompile: generating {}_register.cpp", projectName);
+  tmplData["is_dll"] = ctx_.isDllModule();
+  out = renderWithJson(registry, "codegen/register_cpp", tmplData);
+  SaveCurrentOutData(fmt::format("{}_register.cpp", projectName));
 
   // Filter out imports and rexcrt functions before recompilation
   std::erase_if(functions, [](const FunctionNode* fn) {

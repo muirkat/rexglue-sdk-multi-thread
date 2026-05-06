@@ -91,6 +91,53 @@ TEST_CASE("TemplateRegistry: render unknown ID throws TemplateError", "[Template
   REQUIRE_THROWS_AS(registry.render("nonexistent/template_id", "{}"), rex::codegen::TemplateError);
 }
 
+TEST_CASE("TemplateRegistry: init_h includes shared indirect-call partial", "[TemplateRegistry]") {
+  rex::codegen::TemplateRegistry registry;
+  std::string json = R"({
+    "config_flags": {
+      "skip_lr": false,
+      "ctr_as_local": false,
+      "xer_as_local": false,
+      "reserved_as_local": false,
+      "skip_msr": false,
+      "cr_as_local": false,
+      "non_argument_as_local": false,
+      "non_volatile_as_local": false
+    },
+    "image_base": "0x82000000",
+    "image_size": "0x1000000",
+    "code_base": "0x82010000",
+    "code_size": "0x100000",
+    "thunk_reserve_size": "0x1000",
+    "rexcrt_heap": false,
+    "functions": [],
+    "imports": []
+  })";
+  std::string result = registry.render("codegen/init_h", json);
+  CHECK(result.find("REX_LOOKUP_FUNC") != std::string::npos);
+  CHECK(result.find("ResolveIndirectFunction") != std::string::npos);
+  CHECK(result.find("last_indirect_target") != std::string::npos);
+  CHECK(result.find("REX_THUNK_RESERVE_SIZE") != std::string::npos);
+  CHECK(result.find("[[likely]]") != std::string::npos);
+  CHECK(result.find("[[unlikely]]") != std::string::npos);
+}
+
+TEST_CASE("TemplateRegistry: ppc_config_h includes shared indirect-call partial",
+          "[TemplateRegistry]") {
+  rex::codegen::TemplateRegistry registry;
+  std::string json = R"({
+    "image_base": "0x82000000",
+    "image_size": "0x1000000",
+    "code_base": "0x82010000",
+    "code_size": "0x100000",
+    "thunk_reserve_size": "0x1000"
+  })";
+  std::string result = registry.render("test/ppc_config_h", json);
+  CHECK(result.find("ResolveIndirectFunction") != std::string::npos);
+  CHECK(result.find("last_indirect_target") != std::string::npos);
+  CHECK(result.find("[[likely]]") != std::string::npos);
+}
+
 TEST_CASE("TemplateRegistry: cmake_var callback works", "[TemplateRegistry]") {
   rex::codegen::TemplateRegistry registry;
   std::string result = registry.renderString("{{ cmake_var(\"FOO\") }}", "{}");
