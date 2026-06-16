@@ -11,9 +11,13 @@
 #include "decoded_binary.h"
 
 #include <algorithm>
+#include <cstddef>
 
 #include <rex/memory/utils.h>
 #include <rex/types.h>
+
+#include "codegen_flags.h"
+#include "parallel_for.h"
 
 using rex::memory::load_and_swap;
 
@@ -37,19 +41,20 @@ void DecodedBinary::decode() {
     // Copy raw section data (needed for reading jump tables and other data)
     sec.data.assign(section.data, section.data + section.size);
 
-    // Only decode instructions for executable sections
+    // Only decode instructions for executable sections. Each instruction decodes
+    // independently from its raw word, so fan the work across worker threads;
+    // results are indexed by offset, so the decoded stream is identical to a
+    // serial decode regardless of thread count.
     if (section.executable) {
-      // Reserve space for instructions
-      size_t insnCount = section.size / 4;
-      sec.instructions.reserve(insnCount);
-
-      for (uint32_t offset = 0; offset < section.size; offset += 4) {
-        uint32_t addr = section.baseAddress + offset;
-        uint32_t raw = load_and_swap<uint32_t>(section.data + offset);
-
-        auto insn = rex::codegen::ppc::decode_instruction(addr, raw);
-        sec.instructions.push_back(insn);
-      }
+      const size_t insnCount = section.size / 4;
+      const uint8_t* secData = section.data;
+      const uint32_t secBase = section.baseAddress;
+      sec.instructions =
+          parallelMap(insnCount, REXCVAR_GET(codegen_threads), [secData, secBase](std::size_t i) {
+            uint32_t offset = static_cast<uint32_t>(i * 4);
+            uint32_t raw = load_and_swap<uint32_t>(secData + offset);
+            return rex::codegen::ppc::decode_instruction(secBase + offset, raw);
+          });
     }
 
     sections_.push_back(std::move(sec));
