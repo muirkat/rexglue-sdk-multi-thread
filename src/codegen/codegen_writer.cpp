@@ -13,10 +13,8 @@
 #include "codegen_flags.h"
 
 #include <algorithm>
-#include <atomic>
 #include <filesystem>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -30,6 +28,7 @@
 #include <rex/system/export_resolver.h>
 
 #include "codegen_logging.h"
+#include "parallel_for.h"
 #include "template_registry_internal.h"
 
 #include <xxhash.h>
@@ -110,46 +109,14 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
 
 // Emit C++ for every function into a per-index result vector. Each function's
 // emitCpp() is independent and reads only shared-const state (binary, config,
-// graph, export resolver), so the work is dispatched across worker threads via
-// an atomic cursor. Results are indexed by function position, keeping the
-// concatenated output byte-identical to a serial run regardless of thread count.
+// graph, export resolver), so the work is dispatched across worker threads.
+// Results are indexed by function position, keeping the concatenated output
+// byte-identical to a serial run regardless of thread count.
 std::vector<std::string> emitFunctionsParallel(
     const std::vector<const rex::codegen::FunctionNode*>& functions,
     const rex::codegen::EmitContext& emitCtx) {
-  std::vector<std::string> codes(functions.size());
-  if (functions.empty())
-    return codes;
-
-  unsigned configured = REXCVAR_GET(codegen_threads);
-  unsigned hw = std::thread::hardware_concurrency();
-  unsigned workers = configured ? configured : (hw ? hw : 1u);
-  workers = std::min<unsigned>(workers, static_cast<unsigned>(functions.size()));
-
-  if (workers <= 1) {
-    for (size_t i = 0; i < functions.size(); ++i)
-      codes[i] = functions[i]->emitCpp(emitCtx);
-    return codes;
-  }
-
-  std::atomic<size_t> cursor{0};
-  auto worker = [&]() {
-    for (;;) {
-      size_t i = cursor.fetch_add(1, std::memory_order_relaxed);
-      if (i >= functions.size())
-        break;
-      codes[i] = functions[i]->emitCpp(emitCtx);
-    }
-  };
-
-  std::vector<std::thread> pool;
-  pool.reserve(workers - 1);
-  for (unsigned t = 0; t < workers - 1; ++t)
-    pool.emplace_back(worker);
-  worker();  // run one share on the calling thread
-  for (auto& th : pool)
-    th.join();
-
-  return codes;
+  return rex::codegen::parallelMap(functions.size(), REXCVAR_GET(codegen_threads),
+                                   [&](std::size_t i) { return functions[i]->emitCpp(emitCtx); });
 }
 
 }  // namespace
