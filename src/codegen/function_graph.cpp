@@ -959,8 +959,10 @@ void FunctionGraph::addUnresolvedJumpToFunction(uint32_t entry, uint32_t site, u
     return;
   }
 
-  // Not resolvable yet - add as unresolved
+  // Not resolvable yet - add as unresolved and index by target so a later
+  // addFunction(target) can find this waiter without scanning every function.
   node->addUnresolvedJump(site, target, isCall, conditional);
+  unresolvedWaitersByTarget_[target].push_back(entry);
   REXCODEGEN_TRACE("FunctionGraph: added unresolved {} 0x{:08X}->0x{:08X} to function 0x{:08X}",
                    isCall ? "call" : "jump", site, target, entry);
 }
@@ -1206,8 +1208,18 @@ TargetKind FunctionGraph::classifyTarget(uint32_t target, uint32_t callerAddr,
 }
 
 void FunctionGraph::notifyFunctionAdded(FunctionNode* newFunction) {
-  for (auto& [base, node] : functions_) {
-    if (node.get() != newFunction && node->isPending()) {
+  // Only functions with an unresolved jump to this entry can resolve against it
+  // (tryResolveAgainst matches jump.target == newFunction->base()). Look them up
+  // via the target index instead of scanning every function.
+  auto it = unresolvedWaitersByTarget_.find(newFunction->base());
+  if (it == unresolvedWaitersByTarget_.end())
+    return;
+
+  for (uint32_t waiterBase : it->second) {
+    if (waiterBase == newFunction->base())
+      continue;
+    FunctionNode* node = getFunction(waiterBase);  // re-lookup: tolerates removed nodes
+    if (node && node->isPending()) {
       node->tryResolveAgainst(newFunction);
     }
   }

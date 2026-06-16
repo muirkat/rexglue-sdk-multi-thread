@@ -13,9 +13,11 @@
 #include "codegen_flags.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include <fmt/format.h>
 #include <inja/inja.hpp>
@@ -27,6 +29,7 @@
 #include <rex/system/export_resolver.h>
 
 #include "codegen_logging.h"
+#include "parallel_for.h"
 #include "template_registry_internal.h"
 
 #include <xxhash.h>
@@ -103,6 +106,18 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
       {"functions", functionsJson},
       {"recomp_files", nlohmann::json::array()},
   };
+}
+
+// Emit C++ for every function into a per-index result vector. Each function's
+// emitCpp() is independent and reads only shared-const state (binary, config,
+// graph, export resolver), so the work is dispatched across worker threads.
+// Results are indexed by function position, keeping the concatenated output
+// byte-identical to a serial run regardless of thread count.
+std::vector<std::string> emitFunctionsParallel(
+    const std::vector<const rex::codegen::FunctionNode*>& functions,
+    const rex::codegen::EmitContext& emitCtx) {
+  return rex::codegen::parallelMap(functions.size(), REXCVAR_GET(codegen_threads),
+                                   [&](std::size_t i) { return functions[i]->emitCpp(emitCtx); });
 }
 
 }  // namespace
@@ -226,13 +241,22 @@ bool CodegenWriter::write(bool force) {
   if (runtime_)
     emitCtx.resolver = runtime_->export_resolver();
 
-  // Generate recomp files with size-based splitting
+  // Emit every function's C++ in parallel (each emitCpp() is independent and
+  // reads only shared-const state), then assemble files serially below so the
+  // size-based splitting stays deterministic and byte-identical to a serial run.
   REXCODEGEN_TRACE("Recompiling {} functions...", functions.size());
+  auto t_emit0 = std::chrono::steady_clock::now();
+  std::vector<std::string> functionCodes = emitFunctionsParallel(functions, emitCtx);
+  REXCODEGEN_DEBUG("[timing] emit      {:>6} ms",
+                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t_emit0)
+                       .count());
+
   size_t currentFileBytes = 0;
   println("#include \"{}_init.h\"\n", projectName);
 
   for (size_t i = 0; i < functions.size(); i++) {
-    std::string code = functions[i]->emitCpp(emitCtx);
+    const std::string& code = functionCodes[i];
 
     if (currentFileBytes > 0 && currentFileBytes + code.size() > REXCVAR_GET(max_file_size_bytes)) {
       SaveCurrentOutData();
@@ -265,7 +289,12 @@ bool CodegenWriter::write(bool force) {
   }
 
   // Write all buffered files to disk
+  auto t_flush0 = std::chrono::steady_clock::now();
   FlushPendingWrites();
+  REXCODEGEN_DEBUG("[timing] flush     {:>6} ms",
+                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t_flush0)
+                       .count());
   return true;
 }
 

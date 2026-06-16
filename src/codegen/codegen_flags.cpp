@@ -27,6 +27,11 @@ REXCVAR_DEFINE_UINT32(progress_log_frequency, 100, "Codegen",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly)
     .range(1, 100000);
 
+REXCVAR_DEFINE_UINT32(codegen_threads, 0, "Codegen",
+                      "Worker threads for per-function C++ emission (0 = autodetect)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly)
+    .range(0, 1024);
+
 //=============================================================================
 // Codegen/Analysis
 //=============================================================================
