@@ -12,6 +12,7 @@
 #include "decoded_binary.h"
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 
 #include <rex/codegen/analysis_errors.h>
@@ -26,9 +27,21 @@ namespace rex::codegen {
 Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   REXCODEGEN_TRACE("Analyze: starting analysis...");
 
+  // Per-stage timing (debug level) -- run with --log-level debug to profile.
+  using stclock = std::chrono::steady_clock;
+  auto stage_start = stclock::now();
+  const auto analyze_start = stage_start;
+  auto stage_done = [&](const char* name) {
+    auto now = stclock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - stage_start).count();
+    REXCODEGEN_DEBUG("[timing] {:<9} {:>6} ms", name, ms);
+    stage_start = now;
+  };
+
   ctx.initDecoded();
   REXCODEGEN_TRACE("Analyze: decoded {} instructions across {} code regions",
                    ctx.decoded().instructionCount(), ctx.decoded().codeRegions().size());
+  stage_done("decode");
 
   // 1. Register entry points (imports, helpers, config, pdata)
   if (reporter)
@@ -37,6 +50,7 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   if (!regResult) {
     return regResult;
   }
+  stage_done("register");
 
   // 2. Scan binary into code/data regions
   if (reporter)
@@ -45,6 +59,7 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   if (!scanResult) {
     return scanResult;
   }
+  stage_done("scan");
 
   // 3. Discover function blocks iteratively (includes vtable scan)
   if (reporter)
@@ -53,6 +68,7 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   if (!discoverResult) {
     return discoverResult;
   }
+  stage_done("discover");
 
   // 3.5. Function pointer scan: find lis/addi pairs loading code addresses
   // TODO(tomc): disabled for now, causes too many false positives
@@ -65,6 +81,7 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   if (!gapFillResult) {
     return gapFillResult;
   }
+  stage_done("gapfill");
 
   // 5. Merge: resolve jumps and seal functions
   if (reporter)
@@ -73,6 +90,7 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   if (!mergeResult) {
     return mergeResult;
   }
+  stage_done("merge");
 
   // 6. Validate
   if (reporter)
@@ -81,6 +99,12 @@ Result<void> Analyze(CodegenContext& ctx, ProgressReporter* reporter) {
   if (!validateResult) {
     return validateResult;
   }
+  stage_done("validate");
+
+  auto total_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(stclock::now() - analyze_start).count();
+  REXCODEGEN_DEBUG("[timing] analyze   {:>6} ms total ({} functions)", total_ms,
+                   ctx.graph.functionCount());
 
   REXCODEGEN_TRACE("Analyze: complete - {} functions ready for code generation",
                    ctx.graph.functionCount());

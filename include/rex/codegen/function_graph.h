@@ -195,7 +195,15 @@ class FunctionGraph {
   std::vector<std::pair<uint32_t, uint32_t>> chunks_;    // base, size pairs
   MemoryReader memoryReader_;
 
-  // Notify all PENDING functions that a new function was added
+  // Index of pending functions awaiting a given jump target, keyed by target
+  // address -> owning function base addresses. Lets notifyFunctionAdded() touch
+  // only the functions with an unresolved jump to the new function's entry,
+  // instead of scanning every function (which made bulk registration O(n^2)).
+  // Bases (not pointers) are stored so entries stay safe across removeFunction;
+  // stale entries are harmless no-ops resolved via re-lookup.
+  std::unordered_map<uint32_t, std::vector<uint32_t>> unresolvedWaitersByTarget_;
+
+  // Notify PENDING functions waiting on this function's entry that it now exists
   void notifyFunctionAdded(FunctionNode* newFunction);
 };
 

@@ -11,7 +11,10 @@
 
 #include "ppc/instruction.h"
 
+#include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <rex/codegen/phases.h>
 #include "phase_helpers.h"
@@ -178,26 +181,70 @@ void gapFillCodeRegions(CodegenContext& ctx) {
 
 void cleanupAbsorbedGapFills(CodegenContext& ctx) {
   auto& graph = ctx.graph;
-  std::vector<uint32_t> toRemove;
+
+  // A GAP_FILL at `addr` is absorbed when some OTHER function covers `addr`.
+  // containsAddress() always requires base <= addr, so any covering function has
+  // base < addr -- which makes both original removal rules (higher authority, or
+  // a lower-addressed GAP_FILL) collapse to the single test above. We answer it
+  // for every GAP_FILL at once with a sweep line over coverage intervals instead
+  // of the old O(functions^2) pairwise scan.
+  //
+  // Coverage intervals mirror containsAddress(): the whole [base, base+size) range
+  // for empty-block / CONFIG / PDATA functions, otherwise each discovered block.
+  enum EventKind { kStart = 0, kEnd = 1, kQuery = 2 };
+  struct Event {
+    uint32_t addr;
+    EventKind kind;
+    uint32_t owner;
+  };
+
+  std::vector<Event> events;
+  events.reserve(graph.functionCount() * 2);
 
   for (const auto& [addr, node] : graph.functions()) {
-    if (node->authority() != FunctionAuthority::GAP_FILL)
-      continue;
+    const bool wholeRange = node->blocks().empty() ||
+                            node->authority() == FunctionAuthority::CONFIG ||
+                            node->authority() == FunctionAuthority::PDATA;
+    if (wholeRange) {
+      events.push_back({node->base(), kStart, node->base()});
+      events.push_back({node->base() + node->size(), kEnd, node->base()});
+    } else {
+      for (const auto& block : node->blocks()) {
+        events.push_back({block.base, kStart, node->base()});
+        events.push_back({block.end(), kEnd, node->base()});
+      }
+    }
+    if (node->authority() == FunctionAuthority::GAP_FILL)
+      events.push_back({addr, kQuery, addr});
+  }
 
-    for (const auto& [otherAddr, otherNode] : graph.functions()) {
-      if (otherAddr == addr)
-        continue;
-      if (!otherNode->containsAddress(addr))
-        continue;
+  // Sort by address; at equal address apply interval start/end before queries so
+  // a query at X sees intervals with start <= X < end (half-open coverage).
+  std::sort(events.begin(), events.end(), [](const Event& a, const Event& b) {
+    if (a.addr != b.addr)
+      return a.addr < b.addr;
+    return a.kind < b.kind;  // kStart, kEnd, then kQuery
+  });
 
-      // This GAP_FILL is inside another function's blocks
-      if (otherNode->authority() != FunctionAuthority::GAP_FILL) {
-        // Absorbed by higher authority - remove
-        toRemove.push_back(addr);
+  std::unordered_map<uint32_t, int> activeByOwner;  // owner base -> active interval count
+  int distinctActiveOwners = 0;
+  std::vector<uint32_t> toRemove;
+
+  for (const auto& ev : events) {
+    switch (ev.kind) {
+      case kStart:
+        if (activeByOwner[ev.owner]++ == 0)
+          ++distinctActiveOwners;
         break;
-      } else if (otherAddr < addr) {
-        // Both GAP_FILL, other has lower address - it survives
-        toRemove.push_back(addr);
+      case kEnd:
+        if (--activeByOwner[ev.owner] == 0)
+          --distinctActiveOwners;
+        break;
+      case kQuery: {
+        // Absorbed if any active owner other than the GAP_FILL itself covers addr.
+        int selfActive = activeByOwner[ev.owner] > 0 ? 1 : 0;
+        if (distinctActiveOwners - selfActive > 0)
+          toRemove.push_back(ev.addr);
         break;
       }
     }

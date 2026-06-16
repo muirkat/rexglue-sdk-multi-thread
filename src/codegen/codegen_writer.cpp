@@ -13,6 +13,7 @@
 #include "codegen_flags.h"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -244,7 +245,12 @@ bool CodegenWriter::write(bool force) {
   // reads only shared-const state), then assemble files serially below so the
   // size-based splitting stays deterministic and byte-identical to a serial run.
   REXCODEGEN_TRACE("Recompiling {} functions...", functions.size());
+  auto t_emit0 = std::chrono::steady_clock::now();
   std::vector<std::string> functionCodes = emitFunctionsParallel(functions, emitCtx);
+  REXCODEGEN_DEBUG("[timing] emit      {:>6} ms",
+                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t_emit0)
+                       .count());
 
   size_t currentFileBytes = 0;
   println("#include \"{}_init.h\"\n", projectName);
@@ -283,7 +289,12 @@ bool CodegenWriter::write(bool force) {
   }
 
   // Write all buffered files to disk
+  auto t_flush0 = std::chrono::steady_clock::now();
   FlushPendingWrites();
+  REXCODEGEN_DEBUG("[timing] flush     {:>6} ms",
+                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - t_flush0)
+                       .count());
   return true;
 }
 
