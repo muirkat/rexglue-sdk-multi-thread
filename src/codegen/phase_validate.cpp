@@ -11,6 +11,10 @@
 
 #include <rex/codegen/phases.h>
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
 #include <fmt/format.h>
 
 #include <rex/codegen/analysis_errors.h>
@@ -42,6 +46,30 @@ const CallEdge* findCallEdgeAt(const FunctionNode* node, uint32_t site) {
   return nullptr;
 }
 
+// Mirror BuilderContext::emit_conditional_branch (builders/context.cpp): decide
+// whether a conditional branch (bc) at `site` targeting `target` resolves to real
+// generated control flow, or whether emission would instead bake a runtime
+// REX_FATAL("Unresolved branch ...") into the C++. A bc resolves iff:
+//   - classifyTarget says InternalLabel (local `goto`), or
+//   - it is a Function/Import with a recorded call edge at the site (conditional
+//     tail call). Without a call edge, or for an Unknown target, emission bakes a
+//     FATAL.
+// Keeping this in lockstep with emission guarantees we flag exactly the branches
+// that would die at runtime and nothing that codegen resolves cleanly.
+bool conditionalBranchResolves(const FunctionGraph& graph, const FunctionNode* node, uint32_t site,
+                               uint32_t target) {
+  switch (graph.classifyTarget(target, site, /*isCallInstruction=*/false)) {
+    case TargetKind::InternalLabel:
+      return true;
+    case TargetKind::Function:
+    case TargetKind::Import:
+      return findCallEdgeAt(node, site) != nullptr;
+    case TargetKind::Unknown:
+      return false;
+  }
+  return false;
+}
+
 VoidResult validateGraph(CodegenContext& ctx) {
   REXCODEGEN_TRACE("Analyze: validating call graph...");
 
@@ -52,6 +80,14 @@ VoidResult validateGraph(CodegenContext& ctx) {
   size_t functionsChecked = 0;
   size_t callsChecked = 0;
   size_t edgesVerified = 0;
+
+  // Sorted function entry points, used to name the next function start when a
+  // branch target lands past a (likely truncated) function end.
+  std::vector<uint32_t> sortedBases;
+  sortedBases.reserve(graph.functions().size());
+  for (const auto& [addr, node] : graph.functions())
+    sortedBases.push_back(addr);
+  std::sort(sortedBases.begin(), sortedBases.end());
 
   for (const auto& [addr, node] : graph.functions()) {
     functionsChecked++;
@@ -135,6 +171,48 @@ VoidResult validateGraph(CodegenContext& ctx) {
               edgesVerified++;
             }
           }
+        }
+
+        // Conditional branches (bc/bcl). The unconditional b/bl path above is
+        // validated independently; bc was historically unchecked, so a target
+        // past a truncated function end slipped through analysis and emission
+        // baked a runtime REX_FATAL("Unresolved branch ...") instead. Validate
+        // it here with the same predicate emission uses, converting that runtime
+        // failure class into a codegen-time error.
+        if (PPC_OP(insn) == PPC_OP_BC && !PPC_BA(insn)) {
+          uint32_t site = block.base + static_cast<uint32_t>(offset);
+          uint32_t target = site + static_cast<uint32_t>(PPC_BD(insn));
+          bool isCall = PPC_BL(insn);  // bcl
+
+          callsChecked++;
+
+          if (conditionalBranchResolves(graph, node.get(), site, target)) {
+            edgesVerified++;
+            continue;
+          }
+
+          // Unresolved: emission would bake a runtime FATAL here. When the target
+          // lands past this function's end but before the next known function,
+          // the declared size is almost certainly truncated - name the knob to turn.
+          std::string detail;
+          uint32_t funcEnd = node->end();
+          if (target >= funcEnd) {
+            auto it = std::upper_bound(sortedBases.begin(), sortedBases.end(), node->base());
+            uint32_t nextStart = (it != sortedBases.end()) ? *it : 0;
+            if (nextStart == 0 || target < nextStart) {
+              detail =
+                  fmt::format("; 0x{:X} bytes past declared end 0x{:08X} - declared size of "
+                              "0x{:08X} likely truncated",
+                              target - funcEnd, funcEnd, node->base());
+              if (nextStart != 0)
+                detail += fmt::format(" (next function starts at 0x{:08X})", nextStart);
+            }
+          }
+
+          errors.Add(AnalysisErrors::Category::UnresolvedCall, target, site,
+                     fmt::format("{} 0x{:08X} from 0x{:08X} in {} - conditional branch target "
+                                 "unresolved (would emit REX_FATAL at runtime){}",
+                                 isCall ? "bcl" : "bc", target, site, node->name(), detail));
         }
       }
     }
