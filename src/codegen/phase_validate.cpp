@@ -200,10 +200,10 @@ VoidResult validateGraph(CodegenContext& ctx) {
             auto it = std::upper_bound(sortedBases.begin(), sortedBases.end(), node->base());
             uint32_t nextStart = (it != sortedBases.end()) ? *it : 0;
             if (nextStart == 0 || target < nextStart) {
-              detail =
-                  fmt::format("; 0x{:X} bytes past declared end 0x{:08X} - declared size of "
-                              "0x{:08X} likely truncated",
-                              target - funcEnd, funcEnd, node->base());
+              detail = fmt::format(
+                  "; 0x{:X} bytes past declared end 0x{:08X} - declared size of "
+                  "0x{:08X} likely truncated",
+                  target - funcEnd, funcEnd, node->base());
               if (nextStart != 0)
                 detail += fmt::format(" (next function starts at 0x{:08X})", nextStart);
             }
