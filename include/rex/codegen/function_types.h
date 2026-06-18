@@ -227,6 +227,15 @@ struct CallEdge {
 // where emission would otherwise bake a runtime REX_FATAL. Both the code emitter
 // and the Validate phase consult FunctionGraph::resolveBranch() so they can never
 // disagree about whether a branch resolves.
+
+// How a branch's function/import target is resolved into a concrete destination.
+// The classification core (classifyTarget) is shared; only the mechanism that
+// turns a "callable" classification into a target differs per branch form.
+enum class BranchForm {
+  Conditional,  // bc: resolve via the recorded call edge at the branch site
+  Indirect,     // bctr jump-table case: resolve via getFunction(target)
+};
+
 struct BranchResolution {
   enum class Kind {
     LocalLabel,  // goto loc_<target> within the caller
@@ -237,7 +246,7 @@ struct BranchResolution {
 
   Kind kind = Kind::Unresolved;
   uint32_t target = 0;
-  FunctionNode* function = nullptr;              // valid when kind == Call
+  const FunctionNode* function = nullptr;        // valid when kind == Call
   const CallTarget::ToImport* import = nullptr;  // valid when kind == Import
 
   // When kind == Unresolved: true if the target classified as a callable entry

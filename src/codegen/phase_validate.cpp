@@ -164,7 +164,7 @@ VoidResult validateGraph(CodegenContext& ctx) {
 
           // Same authority emission uses, so validation and emission cannot
           // disagree about whether this bc resolves.
-          if (graph.resolveBranch(node.get(), site, target).resolves()) {
+          if (graph.resolveBranch(node.get(), site, target, BranchForm::Conditional).resolves()) {
             edgesVerified++;
             continue;
           }
@@ -192,6 +192,27 @@ VoidResult validateGraph(CodegenContext& ctx) {
                                  "unresolved (would emit REX_FATAL at runtime){}",
                                  isCall ? "bcl" : "bc", target, site, node->name(), detail));
         }
+      }
+    }
+
+    // The instruction loop above covers b/bl/bc; bctr jump tables resolve their
+    // case targets out-of-band (node->jumpTables()), so they were never validated
+    // -- an unresolved case target silently baked a runtime REX_FATAL at the bctr.
+    // Check them through the same authority emission uses.
+    for (const auto& jt : node->jumpTables()) {
+      for (uint32_t target : jt.targets) {
+        if (target == 0)
+          continue;  // null case emits __builtin_trap, not a FATAL
+        callsChecked++;
+        if (graph.resolveBranch(node.get(), jt.bctrAddress, target, BranchForm::Indirect)
+                .resolves()) {
+          edgesVerified++;
+          continue;
+        }
+        errors.Add(AnalysisErrors::Category::UnresolvedCall, target, jt.bctrAddress,
+                   fmt::format("bctr jump target 0x{:08X} from 0x{:08X} in {} - unresolved "
+                               "(would emit REX_FATAL at runtime)",
+                               target, jt.bctrAddress, node->name()));
       }
     }
   }

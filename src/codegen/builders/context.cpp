@@ -253,7 +253,7 @@ void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
 
   // Single shared authority (also used by phase_validate) decides resolution,
   // folding classification and the recorded call edge into one outcome.
-  auto res = graph().resolveBranch(&fn, base, target);
+  auto res = graph().resolveBranch(&fn, base, target, BranchForm::Conditional);
 
   switch (res.kind) {
     case BranchResolution::Kind::LocalLabel:

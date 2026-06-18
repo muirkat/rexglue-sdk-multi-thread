@@ -1208,7 +1208,7 @@ TargetKind FunctionGraph::classifyTarget(uint32_t target, uint32_t callerAddr,
 }
 
 BranchResolution FunctionGraph::resolveBranch(const FunctionNode* caller, uint32_t site,
-                                              uint32_t target) const {
+                                              uint32_t target, BranchForm form) const {
   BranchResolution res;
   res.target = target;
 
@@ -1223,36 +1223,47 @@ BranchResolution FunctionGraph::resolveBranch(const FunctionNode* caller, uint32
   if (kind == TargetKind::Function || kind == TargetKind::Import) {
     res.classifiedCallable = true;
 
-    // Resolve via the recorded call edge at this site (emission renders the
-    // edge's target, so resolution requires the edge, not just classification).
-    const CallEdge* edge = nullptr;
-    if (caller) {
-      for (const auto& e : caller->calls()) {
-        if (e.site == site) {
-          edge = &e;
-          break;
-        }
+    if (form == BranchForm::Indirect) {
+      // Jump-table case: emission renders getFunction(target)->name() directly
+      // (imports included -- their node carries the __imp__ name), so resolution
+      // requires the target be a known function entry.
+      if (const FunctionNode* fn = getFunction(target)) {
+        res.kind = BranchResolution::Kind::Call;
+        res.function = fn;
+        return res;
       }
-      if (!edge) {
-        for (const auto& e : caller->tailCalls()) {
+    } else {
+      // Conditional: emission renders the recorded call edge's target, so
+      // resolution requires the edge, not just the classification.
+      const CallEdge* edge = nullptr;
+      if (caller) {
+        for (const auto& e : caller->calls()) {
           if (e.site == site) {
             edge = &e;
             break;
           }
         }
+        if (!edge) {
+          for (const auto& e : caller->tailCalls()) {
+            if (e.site == site) {
+              edge = &e;
+              break;
+            }
+          }
+        }
       }
-    }
 
-    if (edge) {
-      if (const auto* fn = std::get_if<CallTarget::ToFunction>(&edge->target.value)) {
-        res.kind = BranchResolution::Kind::Call;
-        res.function = fn->node;
-        return res;
-      }
-      if (const auto* imp = std::get_if<CallTarget::ToImport>(&edge->target.value)) {
-        res.kind = BranchResolution::Kind::Import;
-        res.import = imp;
-        return res;
+      if (edge) {
+        if (const auto* fn = std::get_if<CallTarget::ToFunction>(&edge->target.value)) {
+          res.kind = BranchResolution::Kind::Call;
+          res.function = fn->node;
+          return res;
+        }
+        if (const auto* imp = std::get_if<CallTarget::ToImport>(&edge->target.value)) {
+          res.kind = BranchResolution::Kind::Import;
+          res.import = imp;
+          return res;
+        }
       }
     }
   }

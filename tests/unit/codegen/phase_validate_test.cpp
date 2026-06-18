@@ -158,6 +158,49 @@ TEST_CASE("Validate flags a bc to a function entry with no recorded call edge",
   REQUIRE(unresolvedCount(ctx) >= 1);
 }
 
+TEST_CASE("Validate flags an unresolved bctr jump-table target", "[codegen][phase_validate]") {
+  // Jump-table case targets resolve out-of-band; one lands in no function, which
+  // emission would turn into REX_FATAL at the bctr. This surface was unvalidated.
+  std::vector<uint8_t> text(0x200, 0);
+  auto ctx = makeContext(std::move(text));
+  ctx.graph.addFunction(kTextBase, 0x100, FunctionAuthority::CONFIG);
+  ctx.graph.addBlockToFunction(kTextBase, Block{kTextBase, 0x100});
+
+  JumpTable jt;
+  jt.bctrAddress = kTextBase + 0x80;
+  jt.indexRegister = 3;
+  jt.targets = {kTextBase + 0x40, kTextBase + 0x5000};  // internal label, then unresolved
+  ctx.graph.addJumpTableToFunction(kTextBase, jt);
+
+  auto result = phases::Validate(ctx);
+
+  REQUIRE_FALSE(result.has_value());
+  REQUIRE(unresolvedCount(ctx) >= 1);
+}
+
+TEST_CASE("Validate accepts bctr targets that are internal labels or known functions",
+          "[codegen][phase_validate]") {
+  const uint32_t fnA = kTextBase;
+  const uint32_t fnB = kTextBase + 0x1000;
+  std::vector<uint8_t> text(0x1200, 0);
+  auto ctx = makeContext(std::move(text));
+  ctx.graph.addFunction(fnA, 0x100, FunctionAuthority::CONFIG);
+  ctx.graph.addBlockToFunction(fnA, Block{fnA, 0x100});
+  ctx.graph.addFunction(fnB, 0x100, FunctionAuthority::DISCOVERED);
+  ctx.graph.addBlockToFunction(fnB, Block{fnB, 0x100});
+
+  JumpTable jt;
+  jt.bctrAddress = fnA + 0x80;
+  jt.indexRegister = 3;
+  jt.targets = {fnA + 0x40, fnB, 0};  // internal label, known function entry, null (trap, skipped)
+  ctx.graph.addJumpTableToFunction(fnA, jt);
+
+  auto result = phases::Validate(ctx);
+
+  REQUIRE(result.has_value());
+  REQUIRE(unresolvedCount(ctx) == 0);
+}
+
 TEST_CASE("Validate flags a bl to an address in no function", "[codegen][phase_validate]") {
   // Sanity check that the harness also drives the unconditional b/bl path.
   std::vector<uint8_t> text(0x200, 0);

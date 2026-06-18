@@ -138,16 +138,22 @@ bool build_bctr(BuilderContext& ctx) {
         continue;
       }
 
-      auto kind = ctx.graph().classifyTarget(label, ctx.base, false);
-      switch (kind) {
-        case TargetKind::InternalLabel:
+      // Same shared authority validation uses, so a jump-table target that would
+      // bake a runtime FATAL here is flagged by phase_validate at codegen time.
+      auto res = ctx.graph().resolveBranch(&ctx.fn, ctx.base, label, BranchForm::Indirect);
+      switch (res.kind) {
+        case BranchResolution::Kind::LocalLabel:
           ctx.println("\t\tgoto loc_{:X};", label);
           break;
-        case TargetKind::Function:
-        case TargetKind::Import:
-          if (auto* targetFn = ctx.graph().getFunction(label)) {
-            ctx.println("\t\t{}(ctx, base);", targetFn->name());
-          } else {
+        case BranchResolution::Kind::Call:
+        case BranchResolution::Kind::Import:
+          // Indirect resolution always yields a function node (getFunction),
+          // whose name() already carries the __imp__ prefix for imports.
+          ctx.println("\t\t{}(ctx, base);", res.function->name());
+          ctx.println("\t\treturn;");
+          break;
+        case BranchResolution::Kind::Unresolved:
+          if (res.classifiedCallable) {
             REXCODEGEN_ERROR(
                 "Jump target 0x{:08X} classified as function but not in graph at bctr 0x{:08X}",
                 label, ctx.base);
@@ -155,13 +161,11 @@ bool build_bctr(BuilderContext& ctx) {
                 "\t\tREX_FATAL(\"Jump target 0x{:08X} classified as function but not "
                 "in graph at bctr 0x{:08X}\");",
                 label, ctx.base);
+          } else {
+            REXCODEGEN_ERROR("Jump target 0x{:08X} unresolved at bctr 0x{:08X}", label, ctx.base);
+            ctx.println("\t\tREX_FATAL(\"Jump target 0x{:08X} unresolved at bctr 0x{:08X}\");",
+                        label, ctx.base);
           }
-          ctx.println("\t\treturn;");
-          break;
-        default:
-          REXCODEGEN_ERROR("Jump target 0x{:08X} unresolved at bctr 0x{:08X}", label, ctx.base);
-          ctx.println("\t\tREX_FATAL(\"Jump target 0x{:08X} unresolved at bctr 0x{:08X}\");", label,
-                      ctx.base);
           break;
       }
     }
