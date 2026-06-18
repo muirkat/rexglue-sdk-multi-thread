@@ -141,10 +141,13 @@ u32 NtQueryInformationFile_entry(u32 file_handle, ppc_ptr_t<X_IO_STATUS_BLOCK> i
       break;
     }
     case XFileSectorInformation: {
-      REXKRNL_DEBUG("Stub XFileSectorInformation!");
+      // A file's starting disc sector is meaningless on the host's flat virtual
+      // filesystem. The previous stub returned hash_combine(filename), which some
+      // titles read back as a magnitude: Fable II, loading save:\texturemorphs.bin,
+      // turns it into a ~2 GB allocation that aborts in BaseHeap::Alloc. Return 0
+      // ("no sector info") — the documented-safe value games tolerate.
       auto info = info_ptr.as<uint32_t*>();
-      size_t fname_hash = rex::memory::hash_combine(82589933LL, file->path());
-      *info = static_cast<uint32_t>(fname_hash ^ (fname_hash >> 32));
+      *info = 0;
       out_length = sizeof(uint32_t);
       break;
     }
