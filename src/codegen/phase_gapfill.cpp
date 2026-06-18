@@ -175,6 +175,57 @@ void gapFillCodeRegions(CodegenContext& ctx) {
   }
 }
 
+// Demand-driven gap fill: register a function at each unresolved branch target
+// that expects a callable but has no owning entry, and return how many were
+// added.
+//
+// Block discovery registers `bl` call targets as functions but leaves `b`
+// tail-call targets to later resolution (phase_discover: "bl only, not b").
+// When such a target is a thunk reachable only by `b` -- in particular the tail
+// of an over-claiming neighbor whose registered [base,size) bounds still span
+// it -- region-based gap fill never carves it, so emission bakes a runtime
+// FATAL. Here we seed exactly those targets: addFunction() re-resolves the
+// waiting branch as the entry appears.
+//
+// Surgical by construction: only addresses some branch actually targets are
+// considered (data/padding is never a branch target), purely conditional `bc`
+// branches are skipped (their targets are internal labels, not entries), and
+// targets already inside another function's blocks are left alone (so real
+// control flow is never split).
+size_t fillUnresolvedBranchTargets(CodegenContext& ctx) {
+  auto& graph = ctx.graph;
+  auto& binary = ctx.binary();
+  const auto& invalid = ctx.analysisState().invalidInstructions;
+
+  std::unordered_set<uint32_t> targets;
+  for (const auto& [addr, node] : graph.functions()) {
+    for (const auto& uj : node->unresolvedJumps()) {
+      // Conditional, non-linking branches (bc/beq/...) target internal labels,
+      // never function entries -- registering one would split real control flow.
+      if (!uj.isCall && uj.isConditional)
+        continue;
+
+      uint32_t t = uj.target;
+      if (graph.getFunction(t) || graph.isImport(t))
+        continue;  // already an entry / import
+      if (graph.getFunctionContaining(t))
+        continue;  // inside another function's blocks -- not a new entry
+      if (binary.isInImportExportRange(t) || !binary.isExecutable(t))
+        continue;  // must be real executable code
+      if (invalid.contains(t))
+        continue;  // flagged as data masquerading as code
+
+      targets.insert(t);
+    }
+  }
+
+  for (uint32_t t : targets) {
+    graph.addFunction(t, 4, FunctionAuthority::GAP_FILL, false);
+    REXCODEGEN_TRACE("GapFill: demand-registered sub_{:08X} (unresolved branch target)", t);
+  }
+  return targets.size();
+}
+
 //=============================================================================
 // Cleanup absorbed GAP_FILL functions
 //=============================================================================
@@ -267,10 +318,34 @@ VoidResult GapFill(CodegenContext& ctx, ProgressReporter* reporter) {
   (void)reporter;
   gapFillCodeRegions(ctx);
 
-  // Discover blocks for gap-filled functions
-  auto known = buildKnownFunctions(ctx.graph, /*excludeGapFill=*/true);
-  size_t discovered = discoverPendingFunctions(ctx, known);
-  REXCODEGEN_TRACE("Analyze: discovered blocks for {} gap-filled functions", discovered);
+  // Discover blocks for region gap-filled functions
+  {
+    auto known = buildKnownFunctions(ctx.graph, /*excludeGapFill=*/true);
+    size_t discovered = discoverPendingFunctions(ctx, known);
+    REXCODEGEN_TRACE("Analyze: discovered blocks for {} gap-filled functions", discovered);
+  }
+
+  // Demand-driven pass: claim unresolved branch targets that no entry owns, then
+  // discover them. Iterate to a fixpoint -- a thunk's body can `b` to the next
+  // thunk in a chain, and addFunction() re-resolves waiting branches as each
+  // entry appears, exposing the next target. Cap rounds as a backstop.
+  constexpr int kMaxRounds = 64;
+  size_t totalDemand = 0;
+  int round = 0;
+  for (; round < kMaxRounds; ++round) {
+    size_t added = fillUnresolvedBranchTargets(ctx);
+    if (added == 0)
+      break;
+    totalDemand += added;
+
+    auto known = buildKnownFunctions(ctx.graph, /*excludeGapFill=*/true);
+    discoverPendingFunctions(ctx, known);
+  }
+  if (round == kMaxRounds)
+    REXCODEGEN_WARN("GapFill: demand-driven pass hit round cap ({})", kMaxRounds);
+  if (totalDemand > 0)
+    REXCODEGEN_TRACE("Analyze: demand-filled {} unresolved branch targets over {} rounds",
+                     totalDemand, round);
 
   cleanupAbsorbedGapFills(ctx);
 
