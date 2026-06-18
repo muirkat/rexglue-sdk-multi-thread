@@ -46,30 +46,6 @@ const CallEdge* findCallEdgeAt(const FunctionNode* node, uint32_t site) {
   return nullptr;
 }
 
-// Mirror BuilderContext::emit_conditional_branch (builders/context.cpp): decide
-// whether a conditional branch (bc) at `site` targeting `target` resolves to real
-// generated control flow, or whether emission would instead bake a runtime
-// REX_FATAL("Unresolved branch ...") into the C++. A bc resolves iff:
-//   - classifyTarget says InternalLabel (local `goto`), or
-//   - it is a Function/Import with a recorded call edge at the site (conditional
-//     tail call). Without a call edge, or for an Unknown target, emission bakes a
-//     FATAL.
-// Keeping this in lockstep with emission guarantees we flag exactly the branches
-// that would die at runtime and nothing that codegen resolves cleanly.
-bool conditionalBranchResolves(const FunctionGraph& graph, const FunctionNode* node, uint32_t site,
-                               uint32_t target) {
-  switch (graph.classifyTarget(target, site, /*isCallInstruction=*/false)) {
-    case TargetKind::InternalLabel:
-      return true;
-    case TargetKind::Function:
-    case TargetKind::Import:
-      return findCallEdgeAt(node, site) != nullptr;
-    case TargetKind::Unknown:
-      return false;
-  }
-  return false;
-}
-
 VoidResult validateGraph(CodegenContext& ctx) {
   REXCODEGEN_TRACE("Analyze: validating call graph...");
 
@@ -186,7 +162,9 @@ VoidResult validateGraph(CodegenContext& ctx) {
 
           callsChecked++;
 
-          if (conditionalBranchResolves(graph, node.get(), site, target)) {
+          // Same authority emission uses, so validation and emission cannot
+          // disagree about whether this bc resolves.
+          if (graph.resolveBranch(node.get(), site, target).resolves()) {
             edgesVerified++;
             continue;
           }

@@ -219,6 +219,37 @@ struct CallEdge {
 };
 
 //=============================================================================
+// Branch Resolution - single authority shared by emission and validation
+//=============================================================================
+// Describes how a branch target should be rendered. Unlike TargetKind (pure
+// classification), this folds in the recorded call edge so that "classified as a
+// function but with no usable edge" collapses to Unresolved -- the exact case
+// where emission would otherwise bake a runtime REX_FATAL. Both the code emitter
+// and the Validate phase consult FunctionGraph::resolveBranch() so they can never
+// disagree about whether a branch resolves.
+struct BranchResolution {
+  enum class Kind {
+    LocalLabel,  // goto loc_<target> within the caller
+    Call,        // (tail-)call to a known function -- `function` is set
+    Import,      // (tail-)call to an import -- `import` is set
+    Unresolved,  // nothing renders this; emission must trap, validation must error
+  };
+
+  Kind kind = Kind::Unresolved;
+  uint32_t target = 0;
+  FunctionNode* function = nullptr;              // valid when kind == Call
+  const CallTarget::ToImport* import = nullptr;  // valid when kind == Import
+
+  // When kind == Unresolved: true if the target classified as a callable entry
+  // (function/import) that merely lacked a usable call edge, false if the target
+  // was wholly unknown. Emission renders these two cases with slightly different
+  // diagnostics; validation ignores this and only consults resolves().
+  bool classifiedCallable = false;
+
+  bool resolves() const { return kind != Kind::Unresolved; }
+};
+
+//=============================================================================
 // Basic Block
 //=============================================================================
 

@@ -251,48 +251,46 @@ void BuilderContext::emit_function_call(uint32_t address) {
 void BuilderContext::emit_conditional_branch(bool not_, std::string_view cond) {
   uint32_t target = insn.operands[1];
 
-  // Use classifyTarget for consistent branch classification
-  // false = branch instruction (not a call), so own-base means loop back
-  auto kind = graph().classifyTarget(target, base, false);
+  // Single shared authority (also used by phase_validate) decides resolution,
+  // folding classification and the recorded call edge into one outcome.
+  auto res = graph().resolveBranch(&fn, base, target);
 
-  switch (kind) {
-    case TargetKind::InternalLabel:
+  switch (res.kind) {
+    case BranchResolution::Kind::LocalLabel:
       // Target is within this function - local goto
       println("\tif ({}{}.{}) goto loc_{:08X};", not_ ? "!" : "", cr(insn.operands[0]), cond,
               target);
       break;
 
-    case TargetKind::Function:
-    case TargetKind::Import:
-      // Conditional tail call to another function - check pre-resolved call target
-      if (const auto* callTarget = findCallTarget(base)) {
-        if (callTarget->isFunction()) {
-          auto* targetFn = callTarget->asFunction();
-          println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
-          println("\t\t{}(ctx, base);", targetFn->name());
-          println("\t\treturn;");
-          println("\t}}");
-        } else if (callTarget->isImport()) {
-          const auto& importTarget = std::get<CallTarget::ToImport>(callTarget->value);
-          std::string func_name = "__imp__" + importTarget.name;
-          std::replace(func_name.begin(), func_name.end(), '@', '_');
-          std::replace(func_name.begin(), func_name.end(), '.', '_');
-          println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
-          println("\t\t{}(ctx, base);", func_name);
-          println("\t\treturn;");
-          println("\t}}");
-        }
-      } else {
-        REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X} (no CallTarget)",
-                         target, base);
-        println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
-                not_ ? "!" : "", cr(insn.operands[0]), cond, base, target);
-      }
+    case BranchResolution::Kind::Call:
+      // Conditional tail call to another function
+      println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
+      println("\t\t{}(ctx, base);", res.function->name());
+      println("\t\treturn;");
+      println("\t}}");
       break;
 
-    case TargetKind::Unknown:
-      REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
-      println("\t// ERROR: conditional branch to unknown address 0x{:08X}", target);
+    case BranchResolution::Kind::Import: {
+      // Conditional tail call to an import
+      std::string func_name = "__imp__" + res.import->name;
+      std::replace(func_name.begin(), func_name.end(), '@', '_');
+      std::replace(func_name.begin(), func_name.end(), '.', '_');
+      println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
+      println("\t\t{}(ctx, base);", func_name);
+      println("\t\treturn;");
+      println("\t}}");
+      break;
+    }
+
+    case BranchResolution::Kind::Unresolved:
+      // Emission would bake a runtime FATAL here; phase_validate flags it at codegen.
+      if (res.classifiedCallable) {
+        REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X} (no CallTarget)",
+                         target, base);
+      } else {
+        REXCODEGEN_ERROR("Unresolved conditional branch to 0x{:08X} from 0x{:08X}", target, base);
+        println("\t// ERROR: conditional branch to unknown address 0x{:08X}", target);
+      }
       println("\tif ({}{}.{}) REX_FATAL(\"Unresolved branch from 0x{:08X} to 0x{:08X}\");",
               not_ ? "!" : "", cr(insn.operands[0]), cond, base, target);
       break;

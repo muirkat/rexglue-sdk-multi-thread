@@ -186,6 +186,14 @@ class FunctionGraph {
   // Returns how the target should be treated during code generation.
   TargetKind classifyTarget(uint32_t target, uint32_t callerAddr, bool isCallInstruction) const;
 
+  // Resolve a conditional branch (bc) target to a renderable outcome. This is the
+  // single authority shared by code emission (emit_conditional_branch) and the
+  // Validate phase: it combines classifyTarget() with the recorded call edge at
+  // `site`, so a target classified as a function/import but lacking a usable edge
+  // collapses to Unresolved -- exactly the case emission would otherwise turn into
+  // a runtime REX_FATAL. `caller` is the function containing the branch.
+  BranchResolution resolveBranch(const FunctionNode* caller, uint32_t site, uint32_t target) const;
+
  private:
   std::vector<CodeBuffer> codeBuffers_;
   std::unordered_map<uint32_t, std::unique_ptr<FunctionNode>> functions_;
