@@ -1207,6 +1207,71 @@ TargetKind FunctionGraph::classifyTarget(uint32_t target, uint32_t callerAddr,
   return TargetKind::Unknown;
 }
 
+BranchResolution FunctionGraph::resolveBranch(const FunctionNode* caller, uint32_t site,
+                                              uint32_t target, BranchForm form) const {
+  BranchResolution res;
+  res.target = target;
+
+  // Same classifier emission uses (callerAddr = the branch site, not a call).
+  TargetKind kind = classifyTarget(target, site, /*isCallInstruction=*/false);
+
+  if (kind == TargetKind::InternalLabel) {
+    res.kind = BranchResolution::Kind::LocalLabel;
+    return res;
+  }
+
+  if (kind == TargetKind::Function || kind == TargetKind::Import) {
+    res.classifiedCallable = true;
+
+    if (form == BranchForm::Indirect) {
+      // Jump-table case: emission renders getFunction(target)->name() directly
+      // (imports included -- their node carries the __imp__ name), so resolution
+      // requires the target be a known function entry.
+      if (const FunctionNode* fn = getFunction(target)) {
+        res.kind = BranchResolution::Kind::Call;
+        res.function = fn;
+        return res;
+      }
+    } else {
+      // Conditional: emission renders the recorded call edge's target, so
+      // resolution requires the edge, not just the classification.
+      const CallEdge* edge = nullptr;
+      if (caller) {
+        for (const auto& e : caller->calls()) {
+          if (e.site == site) {
+            edge = &e;
+            break;
+          }
+        }
+        if (!edge) {
+          for (const auto& e : caller->tailCalls()) {
+            if (e.site == site) {
+              edge = &e;
+              break;
+            }
+          }
+        }
+      }
+
+      if (edge) {
+        if (const auto* fn = std::get_if<CallTarget::ToFunction>(&edge->target.value)) {
+          res.kind = BranchResolution::Kind::Call;
+          res.function = fn->node;
+          return res;
+        }
+        if (const auto* imp = std::get_if<CallTarget::ToImport>(&edge->target.value)) {
+          res.kind = BranchResolution::Kind::Import;
+          res.import = imp;
+          return res;
+        }
+      }
+    }
+  }
+
+  res.kind = BranchResolution::Kind::Unresolved;
+  return res;
+}
+
 void FunctionGraph::notifyFunctionAdded(FunctionNode* newFunction) {
   // Only functions with an unresolved jump to this entry can resolve against it
   // (tryResolveAgainst matches jump.target == newFunction->base()). Look them up

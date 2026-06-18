@@ -54,6 +54,21 @@ class BinaryView {
   /// Factory - copies all data from Module
   static BinaryView fromModule(const runtime::Module& module);
 
+  /// One section for fromSections() (test/synthetic construction).
+  struct SectionSpec {
+    std::string name;
+    uint32_t baseAddress = 0;
+    std::vector<uint8_t> data;
+    bool executable = true;
+  };
+
+  /// Build a view directly from in-memory sections, bypassing Module loading.
+  /// Intended for unit-testing the codegen analysis phases against synthetic
+  /// binaries; production paths use fromModule(). Section data is moved in and
+  /// owned by the returned view.
+  static BinaryView fromSections(uint32_t baseAddress, uint32_t imageSize,
+                                 std::vector<SectionSpec> sections);
+
   // Move-only (owns large buffers)
   BinaryView(BinaryView&&) noexcept = default;
   BinaryView& operator=(BinaryView&&) noexcept = default;

@@ -104,6 +104,32 @@ BinaryView BinaryView::fromModule(const runtime::Module& module) {
   return view;
 }
 
+BinaryView BinaryView::fromSections(uint32_t baseAddress, uint32_t imageSize,
+                                    std::vector<SectionSpec> sections) {
+  BinaryView view;
+  view.baseAddress_ = baseAddress;
+  view.imageSize_ = imageSize;
+
+  // reserve() is load-bearing: SectionView::name is a string_view into
+  // sectionNames_ and SectionView::data points into sectionData_, so a
+  // reallocation mid-loop would dangle the views written earlier.
+  view.sectionNames_.reserve(sections.size());
+  view.sectionData_.reserve(sections.size());
+  view.sections_.reserve(sections.size());
+
+  for (auto& spec : sections) {
+    view.sectionNames_.push_back(std::move(spec.name));
+    view.sectionData_.push_back(std::move(spec.data));
+    view.sections_.push_back(
+        SectionView{.name = view.sectionNames_.back(),
+                    .baseAddress = spec.baseAddress,
+                    .size = static_cast<uint32_t>(view.sectionData_.back().size()),
+                    .data = view.sectionData_.back().data(),
+                    .executable = spec.executable});
+  }
+  return view;
+}
+
 const uint8_t* BinaryView::translate(uint32_t addr) const {
   for (const auto& section : sections_) {
     if (auto* ptr = section.translate(addr)) {

@@ -11,6 +11,7 @@ add_executable(unit_tests
     core/chrono_test.cpp
     codegen/config_test.cpp
     codegen/parallel_for_test.cpp
+    codegen/phase_validate_test.cpp
     codegen/template_registry_test.cpp
     ppc/import_function_test.cpp
     ppc/stack_test.cpp
