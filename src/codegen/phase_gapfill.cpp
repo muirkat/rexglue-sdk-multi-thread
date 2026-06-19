@@ -197,6 +197,30 @@ size_t fillUnresolvedBranchTargets(CodegenContext& ctx) {
   auto& binary = ctx.binary();
   const auto& invalid = ctx.analysisState().invalidInstructions;
 
+  // An address is an *interior label* -- a branch target inside some function's
+  // body, not a function entry -- if any conditional branch targets it, or if it
+  // is already a resolved internal label of some function. Registering a function
+  // there splits a real function mid-body: block discovery starts from a non-entry
+  // while the over-claiming neighbor still spans the same range, so both emit
+  // overlapping code and walk into bytes that vary run-to-run -> silent crash on
+  // the real manifest (e.g. 0x83117FB8, reached by both `bc` and `b`).
+  //
+  // The same address can be reached by BOTH a conditional branch and an
+  // unconditional `b` (a `bc`/`b` pair to a shared label), so the per-record
+  // "skip if this record is conditional" test below is not enough on its own --
+  // the `b` record still slips the interior label through. Collect every
+  // interior-label address up front and exclude it regardless of which record
+  // proposes it.
+  std::unordered_set<uint32_t> interiorLabels;
+  for (const auto& [addr, node] : graph.functions()) {
+    for (uint32_t label : node->labels())
+      interiorLabels.insert(label);
+    for (const auto& uj : node->unresolvedJumps()) {
+      if (uj.isConditional)  // bc/beq/... target == interior label of some function
+        interiorLabels.insert(uj.target);
+    }
+  }
+
   std::unordered_set<uint32_t> targets;
   for (const auto& [addr, node] : graph.functions()) {
     for (const auto& uj : node->unresolvedJumps()) {
@@ -206,6 +230,8 @@ size_t fillUnresolvedBranchTargets(CodegenContext& ctx) {
         continue;
 
       uint32_t t = uj.target;
+      if (interiorLabels.contains(t))
+        continue;  // also a conditional/interior-label target -- not an entry
       if (graph.getFunction(t) || graph.isImport(t))
         continue;  // already an entry / import
       if (graph.getFunctionContaining(t))
