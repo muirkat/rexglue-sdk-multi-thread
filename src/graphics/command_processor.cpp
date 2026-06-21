@@ -45,9 +45,9 @@ REXCVAR_DEFINE_BOOL(clear_memory_page_state, true, "GPU",
 REXCVAR_DEFINE_BOOL(occlusion_query_enable, true, "GPU", "Enable host occlusion query handling")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_STRING(readback_resolve, "none", "GPU",
+REXCVAR_DEFINE_STRING(readback_resolve, "some", "GPU",
                       "Controls CPU readback of render-to-texture resolve results.\n"
-                      " none: Disable readback (default)\n"
+                      " none: Disable readback\n"
                       " fast: Read previous frame (delayed, copy every frame)\n"
                       " some: Read previous frame (delayed, copy on cache miss)\n"
                       " full: Immediate sync readback (accurate but stalls)")
